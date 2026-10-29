@@ -2127,7 +2127,7 @@ function parityReport() {
 const SVY = {
   url: 'https://script.google.com/macros/s/AKfycbxlUfm6ZYUg5D8mP1kYTcyameGxTIcVUngbOrien4K3dXHXKY78e6h1eRlDU4RaLzAXyg/exec',
   sid: Math.random().toString(36).slice(2, 10),   // 접속 한 번(새로고침 전까지)
-  mem: {}, busy: false, again: false,
+  mem: {}, busy: false, again: false, fails: 0, retry: 0, backoff: [5, 15, 45, 120, 300, 300], timeout: 40000,
   seq: 0, tries: {}, first: {},
   step: 0, b: 0, a: 0, q2: '', q3: '', sent: false, order: 'before_first', seen2: false,
 };
@@ -2157,16 +2157,32 @@ async function svyFlush() {
   if (!SVY.url) return;
   if (SVY.busy) { SVY.again = true; return; }   // 전송 도중에 새 기록이 쌓이면 끝난 뒤 한 번 더 돈다(남겨지지 않게)
   SVY.busy = true;
+  let failed = false;
   try {
     do {
       SVY.again = false;
       const q = svyGet('q', []);
       for (const rec of Array.isArray(q) ? q : []) {
-        try { await fetch(SVY.url, { method: 'POST', mode: 'no-cors', keepalive: true, body: JSON.stringify(rec) }); } catch (e) { return; }
+        if (!(await svyPost(rec))) { failed = true; break; }
         svySet('q', svyGet('q', []).filter(r => r.rid !== rec.rid));
+        SVY.fails = 0;
       }
-    } while (SVY.again);
+    } while (SVY.again && !failed);
   } finally { SVY.busy = false; }
+  if (failed) { clearTimeout(SVY.retry); SVY.retry = setTimeout(svyFlush, SVY.backoff[Math.min(SVY.fails++, SVY.backoff.length - 1)] * 1000); }
+}
+/* 시트가 '저장했어요'(ok:true)라고 답해야 성공으로 본다. 잠금 시간초과·네트워크 오류·무응답은 실패로 보고 대기열에 둔 채 점점 늦춰 가며 다시 보낸다
+   (시트는 같은 기록ID 를 한 번만 저장해요). 응답을 읽을 수 없는 환경이라 오래(약 13분) 계속 실패하면 마지막에는 응답을 확인하지 않고 보낸다. */
+async function svyPost(rec) {
+  const blind = SVY.fails > SVY.backoff.length;
+  const ctl = typeof AbortController === 'function' ? new AbortController() : null;
+  const timer = ctl && setTimeout(() => ctl.abort(), SVY.timeout);
+  try {
+    const r = await fetch(SVY.url, { method: 'POST', keepalive: true, mode: blind ? 'no-cors' : 'cors', body: JSON.stringify(rec), signal: ctl && ctl.signal });
+    if (blind) return true;
+    const j = await r.json();
+    return !!(j && (j.ok || j.error === 'bad record'));   // 형식이 잘못된 기록은 다시 보내도 소용없으니 버린다
+  } catch (e) { return false; } finally { clearTimeout(timer); }
 }
 function svyInit() {
   const src = new URLSearchParams(location.search).get('src');
