@@ -2127,7 +2127,7 @@ function parityReport() {
 const SVY = {
   url: 'https://script.google.com/macros/s/AKfycbxlUfm6ZYUg5D8mP1kYTcyameGxTIcVUngbOrien4K3dXHXKY78e6h1eRlDU4RaLzAXyg/exec',
   sid: Math.random().toString(36).slice(2, 10),   // 접속 한 번(새로고침 전까지)
-  mem: {}, busy: false,
+  mem: {}, busy: false, again: false,
   seq: 0, tries: {}, first: {},
   step: 0, b: 0, a: 0, q2: '', q3: '', sent: false, order: 'before_first', seen2: false,
 };
@@ -2154,14 +2154,18 @@ function svyEnqueue(kind, data) {   // 기록이 실패해도 체험 흐름은 �
   } catch (e) {}
 }
 async function svyFlush() {
-  if (!SVY.url || SVY.busy) return;
+  if (!SVY.url) return;
+  if (SVY.busy) { SVY.again = true; return; }   // 전송 도중에 새 기록이 쌓이면 끝난 뒤 한 번 더 돈다(남겨지지 않게)
   SVY.busy = true;
   try {
-    const q = svyGet('q', []);
-    for (const rec of Array.isArray(q) ? q : []) {
-      try { await fetch(SVY.url, { method: 'POST', mode: 'no-cors', keepalive: true, body: JSON.stringify(rec) }); } catch (e) { break; }
-      svySet('q', svyGet('q', []).filter(r => r.rid !== rec.rid));
-    }
+    do {
+      SVY.again = false;
+      const q = svyGet('q', []);
+      for (const rec of Array.isArray(q) ? q : []) {
+        try { await fetch(SVY.url, { method: 'POST', mode: 'no-cors', keepalive: true, body: JSON.stringify(rec) }); } catch (e) { return; }
+        svySet('q', svyGet('q', []).filter(r => r.rid !== rec.rid));
+      }
+    } while (SVY.again);
   } finally { SVY.busy = false; }
 }
 function svyInit() {
